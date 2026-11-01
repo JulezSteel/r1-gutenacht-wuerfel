@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=240, initial-scale=1.0, user-scalable=no">
+<title>Gute-Nacht-Würfel</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 240px; height: 282px; overflow: hidden;
+    background: #0e0e10; color: #fff;
+    font-family: -apple-system, sans-serif;
+    -webkit-user-select: none; user-select: none;
+  }
+  .screen { position: absolute; inset: 0; display: none; flex-direction: column; padding: 8px 10px; }
+  .screen.visible { display: flex; }
+
+  /* Header */
+  #title { font-size: 13px; font-weight: 700; color: #FE5000; text-align: center; letter-spacing: .3px; }
+  #sub { font-size: 10px; color: rgba(255,255,255,.55); text-align: center; margin-top: 1px; }
+
+  /* Reels */
+  #reels { display: flex; gap: 6px; margin-top: 8px; }
+  .reel {
+    flex: 1; height: 104px; border-radius: 10px;
+    background: rgba(255,255,255,.06);
+    border: 2px solid rgba(255,255,255,.12);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    position: relative; transition: transform .15s ease, border-color .15s ease;
+  }
+  .reel.selected { transform: translateY(-3px); box-shadow: 0 0 0 2px #FE5000; }
+  .reel .cat { position: absolute; top: 4px; font-size: 9px; color: rgba(255,255,255,.5); }
+  .reel .emoji { font-size: 34px; line-height: 1; margin-top: 8px; }
+  .reel .label { font-size: 10px; text-align: center; margin-top: 6px; padding: 0 3px; line-height: 1.2; min-height: 24px; }
+  .reel .lock {
+    position: absolute; bottom: -8px; font-size: 9px; font-weight: 700;
+    background: #FE5000; color: #0e0e10; border-radius: 6px; padding: 1px 5px; display: none;
+  }
+  .reel.held .lock { display: block; }
+  .reel.held { background: rgba(254,80,0,.12); }
+  .reel.spinning .emoji, .reel.spinning .label { opacity: .55; }
+  .c0 { border-color: #ef4444; } .c1 { border-color: #3b82f6; } .c2 { border-color: #22c55e; }
+
+  #status { font-size: 11px; text-align: center; margin-top: 14px; min-height: 15px; color: rgba(255,255,255,.75); }
+  #status.jackpot { color: #FDE047; font-weight: 700; animation: pulse .6s ease infinite alternate; }
+  @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.08); } }
+
+  #buttons { display: flex; gap: 6px; margin-top: auto; }
+  button {
+    flex: 1; height: 38px; border: none; border-radius: 9px;
+    font-size: 13px; font-weight: 700; font-family: inherit;
+  }
+  #btnSpin { background: rgba(255,255,255,.12); color: #fff; }
+  #btnStory { background: #FE5000; color: #0e0e10; }
+  #hint { font-size: 9px; color: rgba(255,255,255,.4); text-align: center; margin-top: 5px; }
+
+  /* Story screen */
+  #storyHead { font-size: 18px; text-align: center; }
+  #storyState { font-size: 10px; color: #FE5000; text-align: center; margin-top: 2px; }
+  #storyView { flex: 1; overflow: hidden; margin-top: 6px; position: relative; }
+  #storyText { font-size: 13px; line-height: 1.45; transition: transform .2s ease; white-space: pre-wrap; }
+  #storyHint { font-size: 9px; color: rgba(255,255,255,.4); text-align: center; margin-top: 4px; }
+  .dots span { display: inline-block; animation: blink 1.2s infinite; }
+  .dots span:nth-child(2) { animation-delay: .2s; } .dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
+</style>
+</head>
+<body>
+
+<!-- Automat -->
+<div id="slotScreen" class="screen visible">
+  <div id="title">🌙 Gute-Nacht-Würfel</div>
+  <div id="sub">Schütteln zum Drehen</div>
+  <div id="reels"></div>
+  <div id="status">Drei gleiche Farben = Jackpot!</div>
+  <div id="buttons">
+    <button id="btnSpin">🎰 Drehen</button>
+    <button id="btnStory">📖 Los!</button>
+  </div>
+  <div id="hint">Rad wählt · Taste hält · lang drücken = Los</div>
+</div>
+
+<!-- Geschichte -->
+<div id="storyScreen" class="screen">
+  <div id="storyHead"></div>
+  <div id="storyState"></div>
+  <div id="storyView"><div id="storyText"></div></div>
+  <div id="storyHint">Rad: lesen · Taste: zurück</div>
+</div>
+
+<script>
+// ---------- Einstellungen ----------
+var KIND_NAME = 'Adrian';          // optional: Name deines Sohnes, dann fährt er als Beifahrer mit
+var STORY_WORDS = 380;       // ca. 3 Minuten vorgelesen
+var TIMEOUT_MS = 90000;
+
+// ---------- Zutaten (Farbe = Index % 3) ----------
+var REELS = [
+  { cat: 'Held', items: [
+    ['🏎️', 'Rennauto Flitz'], ['🚒', 'Feuerwehrauto Fridolin'], ['🚜', 'Traktor Toni'],
+    ['🚌', 'Schulbus Berta'], ['🚓', 'Polizeiauto Paul'], ['🛻', 'Abschleppwagen Anton'],
+    ['🚂', 'Lokomotive Lotte'], ['🏍️', 'Motorrad Mo'], ['🚚', 'Müllauto Max'] ] },
+  { cat: 'Ort', items: [
+    ['🏁', 'Rennstrecke'], ['🌋', 'Vulkaninsel'], ['🏔️', 'Schneeberg'],
+    ['🏜️', 'Wüste'], ['🌊', 'Strand'], ['🌲', 'Zauberwald'],
+    ['🏙️', 'große Stadt'], ['🌙', 'Mond'], ['🏰', 'Ritterburg'] ] },
+  { cat: 'Überraschung', items: [
+    ['🏆', 'goldener Pokal'], ['🔑', 'Zauberschlüssel'], ['🎈', 'roter Luftballon'],
+    ['🗺️', 'Schatzkarte'], ['🐶', 'kleiner Hund'], ['⚡', 'Turbo-Knopf'],
+    ['🌈', 'Regenbogenreifen'], ['🍪', 'Riesenkeks'], ['🔦', 'Taschenlampe'] ] }
+];
+
+var state = REELS.map(function () { return { idx: 0, held: false, spinning: false }; });
+var selected = 0;
+var spinning = false;
+var storyActive = false;
+var waitingStory = false;
+var storyTimer = null;
+var scrollOffset = 0;
+
+var $reels = document.getElementById('reels');
+var $status = document.getElementById('status');
+var $slot = document.getElementById('slotScreen');
+var $story = document.getElementById('storyScreen');
+var $storyHead = document.getElementById('storyHead');
+var $storyState = document.getElementById('storyState');
+var $storyText = document.getElementById('storyText');
+var $storyView = document.getElementById('storyView');
+
+// ---------- Aufbau ----------
+REELS.forEach(function (r, i) {
+  var el = document.createElement('div');
+  el.className = 'reel';
+  el.innerHTML = '<div class="cat"></div><div class="emoji"></div><div class="label"></div><div class="lock">HALTEN</div>';
+  el.querySelector('.cat').textContent = r.cat;
+  el.addEventListener('click', function () { selected = i; toggleHold(i); });
+  $reels.appendChild(el);
+  state[i].idx = Math.floor(Math.random() * r.items.length);
+});
+
+function render() {
+  var els = $reels.children;
+  for (var i = 0; i < REELS.length; i++) {
+    var it = REELS[i].items[state[i].idx];
+    var el = els[i];
+    el.querySelector('.emoji').textContent = it[0];
+    el.querySelector('.label').textContent = it[1];
+    el.className = 'reel c' + (state[i].idx % 3) +
+      (i === selected ? ' selected' : '') +
+      (state[i].held ? ' held' : '') +
+      (state[i].spinning ? ' spinning' : '');
+  }
+}
+
+function isJackpot() {
+  var c = state[0].idx % 3;
+  return state.every(function (s) { return s.idx % 3 === c; });
+}
+
+function setStatus(text, jackpot) {
+  $status.textContent = text;
+  $status.className = jackpot ? 'jackpot' : '';
+}
+
+// ---------- Automat ----------
+function toggleHold(i) {
+  if (spinning || storyActive) return;
+  state[i].held = !state[i].held;
+  render();
+}
+
+function spin() {
+  if (spinning || storyActive) return;
+  var toSpin = [];
+  state.forEach(function (s, i) { if (!s.held) toSpin.push(i); });
+  if (!toSpin.length) { setStatus('Alles festgehalten – erst eine Rolle lösen'); return; }
+  spinning = true;
+  setStatus('Brumm brumm …');
+  toSpin.forEach(function (i, n) {
+    state[i].spinning = true;
+    var len = REELS[i].items.length;
+    var ticks = 10 + n * 5 + Math.floor(Math.random() * 4);
+    var t = setInterval(function () {
+      state[i].idx = (state[i].idx + 1) % len;
+      render();
+      if (--ticks <= 0) {
+        clearInterval(t);
+        state[i].idx = Math.floor(Math.random() * len);
+        state[i].spinning = false;
+        render();
+        if (state.every(function (s) { return !s.spinning; })) finishSpin();
+      }
+    }, 80);
+  });
+}
+
+function finishSpin() {
+  spinning = false;
+  if (isJackpot()) setStatus('⭐ JACKPOT! ⭐', true);
+  else setStatus('Gefällt’s? Festhalten & nochmal drehen');
+}
+
+// ---------- Geschichte ----------
+function buildPrompt() {
+  var h = REELS[0].items[state[0].idx][1];
+  var o = REELS[1].items[state[1].idx][1];
+  var u = REELS[2].items[state[2].idx][1];
+  var p = 'Erzähle auf Deutsch eine Gute-Nacht-Geschichte für einen sechsjährigen Jungen, der Autos und alles mit Rädern liebt. ' +
+    'Hauptfigur: ' + h + '. Ort: ' + o + '. Wichtige Überraschung: ' + u + '. ' +
+    'Länge: etwa ' + STORY_WORDS + ' Wörter, also rund drei Minuten vorgelesen. ' +
+    'Kurze, einfache Sätze, freundlich und ein bisschen lustig, mit Fahrzeug-Geräuschen wie brumm oder tüt-tüt. ' +
+    'Nichts Gruseliges, keine Unfälle mit Verletzten. ' +
+    'Gegen Ende wird es langsam ruhig: Die Figur fährt nach Hause, macht die Scheinwerfer aus und schläft ein. ';
+  if (KIND_NAME) p += 'Ein Junge namens ' + KIND_NAME + ' fährt als Beifahrer mit und hilft. ';
+  if (isJackpot()) p += 'Das ist eine Jackpot-Geschichte: Baue eine besonders lustige, glitzernde Überraschung ein. ';
+  p += 'Antworte nur mit der Geschichte selbst, ohne Überschrift und ohne Einleitung.';
+  return p;
+}
+
+function startStory() {
+  if (spinning || storyActive) return;
+  storyActive = true;
+  waitingStory = true;
+  scrollOffset = 0;
+  $storyText.style.transform = 'translateY(0)';
+  $storyHead.textContent = state.map(function (s, i) { return REELS[i].items[s.idx][0]; }).join(' ');
+  $storyState.innerHTML = 'Geschichte wird ausgedacht<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+  $storyText.textContent = '';
+  $slot.classList.remove('visible');
+  $story.classList.add('visible');
+
+  var prompt = buildPrompt();
+  if (typeof PluginMessageHandler !== 'undefined') {
+    PluginMessageHandler.postMessage(JSON.stringify({
+      message: prompt, useLLM: true, wantsR1Response: true
+    }));
+    storyTimer = setTimeout(function () {
+      if (!waitingStory) return;
+      waitingStory = false;
+      $storyState.textContent = 'Keine Antwort – WLAN prüfen und nochmal versuchen';
+    }, TIMEOUT_MS);
+  } else {
+    // Testmodus im Browser
+    setTimeout(function () {
+      showStory('(Testmodus im Browser – auf dem R1 kommt hier die echte Geschichte)\n\n' + prompt);
+    }, 800);
+  }
+}
+
+function showStory(text) {
+  waitingStory = false;
+  clearTimeout(storyTimer);
+  $storyState.textContent = 'Wird vorgelesen 🔊';
+  $storyText.textContent = text;
+}
+
+window.onPluginMessage = function (data) {
+  if (!waitingStory || !data) return;
+  var text = '';
+  if (data.data) {
+    try {
+      var parsed = JSON.parse(data.data);
+      text = typeof parsed === 'string' ? parsed : (parsed.story || parsed.text || parsed.message || '');
+    } catch (e) { text = String(data.data); }
+  }
+  if (!text && data.message) text = String(data.message);
+  if (text) showStory(text.trim());
+};
+
+function closeStory() {
+  storyActive = false;
+  waitingStory = false;
+  clearTimeout(storyTimer);
+  $story.classList.remove('visible');
+  $slot.classList.add('visible');
+  render();
+}
+
+function scrollStory(delta) {
+  var max = Math.max(0, $storyText.scrollHeight - $storyView.clientHeight);
+  scrollOffset = Math.min(max, Math.max(0, scrollOffset + delta));
+  $storyText.style.transform = 'translateY(-' + scrollOffset + 'px)';
+}
+
+// ---------- Eingaben ----------
+var lastSide = 0;
+window.addEventListener('sideClick', function () {
+  var now = Date.now();
+  if (now - lastSide < 300) return;   // Doppelklick feuert zwei Events
+  lastSide = now;
+  if (storyActive) closeStory(); else toggleHold(selected);
+});
+window.addEventListener('longPressStart', function () { if (!storyActive) startStory(); });
+window.addEventListener('scrollUp', function () {
+  if (storyActive) { scrollStory(-40); return; }
+  selected = (selected + REELS.length - 1) % REELS.length; render();
+});
+window.addEventListener('scrollDown', function () {
+  if (storyActive) { scrollStory(40); return; }
+  selected = (selected + 1) % REELS.length; render();
+});
+document.getElementById('btnSpin').addEventListener('click', spin);
+document.getElementById('btnStory').addEventListener('click', startStory);
+
+// Schütteln
+(function () {
+  var px = null, py = null, pz = null, ready = true;
+  window.addEventListener('devicemotion', function (e) {
+    var a = e.accelerationIncludingGravity;
+    if (!a) return;
+    var x = a.x || 0, y = a.y || 0, z = a.z || 0;
+    if (px !== null) {
+      var jx = x - px, jy = y - py, jz = z - pz;
+      if (Math.sqrt(jx * jx + jy * jy + jz * jz) > 8 && ready) {
+        ready = false;
+        if (!storyActive) spin();
+        setTimeout(function () { ready = true; }, 1200);
+      }
+    }
+    px = x; py = y; pz = z;
+  });
+})();
+
+// Tastatur zum Testen am Rechner
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') window.dispatchEvent(new Event('sideClick'));
+  if (e.key === 'ArrowUp') window.dispatchEvent(new Event('scrollUp'));
+  if (e.key === 'ArrowDown') window.dispatchEvent(new Event('scrollDown'));
+  if (e.key === 's') spin();
+  if (e.key === 'Enter') window.dispatchEvent(new Event('longPressStart'));
+});
+
+render();
+</script>
+</body>
+</html>
