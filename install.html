@@ -4,13 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gute-Nacht-Würfel installieren</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>
   body { font-family: -apple-system, sans-serif; background: #0e0e10; color: #fff;
          display: flex; flex-direction: column; align-items: center; padding: 32px 16px; }
   h1 { font-size: 20px; color: #FE5000; margin-bottom: 8px; }
   p { color: rgba(255,255,255,.7); font-size: 14px; text-align: center; max-width: 340px; }
-  #qr { background: #fff; padding: 16px; border-radius: 12px; margin: 20px 0; }
+  #qr { background: #fff; padding: 12px; border-radius: 12px; margin: 20px 0; width: 280px; }
+  #qr svg, #qr img { width: 100%; height: auto; display: block; }
   code { font-size: 12px; color: rgba(255,255,255,.5); word-break: break-all; }
 </style>
 </head>
@@ -24,16 +25,31 @@
   var VERSION = 1;
   var appUrl = new URL('index.html', location.href).href + '?v=' + VERSION;
   document.getElementById('url').textContent = appUrl;
-  new QRCode(document.getElementById('qr'), {
-    text: JSON.stringify({
-      title: 'Gute-Nacht-Würfel',
-      url: appUrl,
-      description: 'Zutaten drehen, Geschichte hören',
-      iconUrl: '',
-      themeColor: '#FE5000'
-    }),
-    width: 260, height: 260, correctLevel: QRCode.CorrectLevel.M
+
+  // Nur ASCII in den QR schreiben (Umlaute als \u-Escapes, bleibt gültiges JSON)
+  var payload = JSON.stringify({
+    title: 'Gute-Nacht-Würfel',
+    url: appUrl,
+    description: 'Zutaten drehen, Geschichte hören',
+    iconUrl: '',
+    themeColor: '#FE5000'
+  }).replace(/[\u0080-￿]/g, function (c) {
+    return '\\u' + ('000' + c.charCodeAt(0).toString(16)).slice(-4);
   });
+
+  var box = document.getElementById('qr');
+  try {
+    var qr = qrcode(0, 'M');
+    qr.addData(payload);
+    qr.make();
+    box.innerHTML = qr.createSvgTag(8, 2);
+  } catch (e) {
+    // Fallback: QR als Bild von einem öffentlichen Generator
+    var img = document.createElement('img');
+    img.alt = 'QR-Code';
+    img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&ecc=M&data=' + encodeURIComponent(payload);
+    box.appendChild(img);
+  }
 </script>
 </body>
 </html>
