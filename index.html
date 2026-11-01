@@ -85,7 +85,7 @@
   <div id="storyHead"></div>
   <div id="storyState"></div>
   <div id="storyView"><div id="storyText"></div></div>
-  <div id="storyHint">Rad: lesen · Taste: zurück</div>
+  <div id="storyHint">Rad: lesen · Taste: zurück · lang: nochmal hören</div>
 </div>
 
 <script>
@@ -226,13 +226,14 @@ function startStory() {
   $storyHead.textContent = state.map(function (s, i) { return REELS[i].items[s.idx][0]; }).join(' ');
   $storyState.innerHTML = 'Geschichte wird ausgedacht<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
   $storyText.textContent = '';
+  currentStory = '';
   $slot.classList.remove('visible');
   $story.classList.add('visible');
 
   var prompt = buildPrompt();
   if (typeof PluginMessageHandler !== 'undefined') {
     PluginMessageHandler.postMessage(JSON.stringify({
-      message: prompt, useLLM: true, wantsR1Response: true
+      message: prompt, useLLM: true
     }));
     storyTimer = setTimeout(function () {
       if (!waitingStory) return;
@@ -250,8 +251,76 @@ function startStory() {
 function showStory(text) {
   waitingStory = false;
   clearTimeout(storyTimer);
-  $storyState.textContent = 'Wird vorgelesen 🔊';
+  currentStory = text;
   $storyText.textContent = text;
+  speak(text);
+}
+
+// ---------- Vorlesen ----------
+// Weg 1: Browser-Stimme (speechSynthesis). Startet sie nicht binnen 2,5 s,
+// Weg 2: Text ans R1 schicken und von der eingebauten Stimme vorlesen lassen.
+var currentStory = '';
+var speakToken = 0;
+
+function stopSpeaking() {
+  speakToken++;
+  try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
+}
+
+function chunkText(text) {
+  var parts = text.replace(/\s+/g, ' ').match(/[^.!?]+[.!?]*\s*/g) || [text];
+  var chunks = [], cur = '';
+  parts.forEach(function (p) {
+    if ((cur + p).length > 220 && cur) { chunks.push(cur); cur = ''; }
+    cur += p;
+  });
+  if (cur.trim()) chunks.push(cur);
+  return chunks;
+}
+
+function speak(text) {
+  stopSpeaking();
+  var token = speakToken;
+  var hasTTS = false;
+  try { hasTTS = !!(window.speechSynthesis && window.SpeechSynthesisUtterance); } catch (e) {}
+  if (!hasTTS) { speakWithR1(text); return; }
+
+  var started = false;
+  var voices = [];
+  try { voices = window.speechSynthesis.getVoices() || []; } catch (e) {}
+  var deVoice = voices.filter(function (v) { return /^de/i.test(v.lang); })[0] || null;
+
+  chunkText(text).forEach(function (chunk) {
+    var u = new SpeechSynthesisUtterance(chunk);
+    u.lang = 'de-DE';
+    u.rate = 0.9;
+    if (deVoice) u.voice = deVoice;
+    u.onstart = function () {
+      if (token !== speakToken) return;
+      if (!started) { started = true; $storyState.textContent = 'Wird vorgelesen 🔊 (Browser-Stimme)'; }
+    };
+    window.speechSynthesis.speak(u);
+  });
+
+  setTimeout(function () {
+    if (token !== speakToken || started) return;
+    try { window.speechSynthesis.cancel(); } catch (e) {}
+    speakWithR1(text);
+  }, 2500);
+}
+
+function speakWithR1(text) {
+  if (typeof PluginMessageHandler === 'undefined') {
+    $storyState.textContent = 'Keine Stimme verfügbar (Testmodus)';
+    return;
+  }
+  $storyState.textContent = 'Wird vorgelesen 🔊 (R1-Stimme)';
+  PluginMessageHandler.postMessage(JSON.stringify({
+    message: 'Lies den folgenden Text wörtlich und vollständig auf Deutsch vor. ' +
+      'Sag nichts davor und nichts danach, ändere und kürze nichts.\n\n' + text,
+    useLLM: true,
+    wantsR1Response: true
+  }));
 }
 
 window.onPluginMessage = function (data) {
@@ -268,6 +337,7 @@ window.onPluginMessage = function (data) {
 };
 
 function closeStory() {
+  stopSpeaking();
   storyActive = false;
   waitingStory = false;
   clearTimeout(storyTimer);
@@ -290,7 +360,10 @@ window.addEventListener('sideClick', function () {
   lastSide = now;
   if (storyActive) closeStory(); else toggleHold(selected);
 });
-window.addEventListener('longPressStart', function () { if (!storyActive) startStory(); });
+window.addEventListener('longPressStart', function () {
+  if (!storyActive) { startStory(); return; }
+  if (currentStory && !waitingStory) speak(currentStory);   // nochmal vorlesen
+});
 window.addEventListener('scrollUp', function () {
   if (storyActive) { scrollStory(-40); return; }
   selected = (selected + REELS.length - 1) % REELS.length; render();
