@@ -28,15 +28,26 @@ function clean(s: unknown, max = 60): string {
 async function callGemini(models: string[], body: unknown, key: string) {
   let lastErr = "";
   for (const m of models) {
-    const r = await fetch(`${API}${m}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify(body),
-    });
-    if (r.ok) return await r.json();
-    lastErr = `${m}: ${r.status} ${(await r.text()).slice(0, 300)}`;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await fetch(`${API}${m}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) return await r.json();
+      const t = await r.text();
+      lastErr = `${m}: ${r.status} ${t.slice(0, 300)}`;
+      console.error(lastErr);
+      if (r.status === 429 || r.status >= 500) {
+        // Rate-Limit/Überlast: kurz warten (Hinweis von Google nutzen, max. 20 s) und erneut versuchen
+        const hint = Number(/"retryDelay":\s*"(\d+)/.exec(t)?.[1] ?? 0);
+        await new Promise((res) => setTimeout(res, Math.min(20, Math.max(3, hint || 3 * (attempt + 1))) * 1000));
+        continue;
+      }
+      break;
+    }
     // Nur bei "Modell nicht gefunden" das nächste Modell probieren
-    if (r.status !== 404 && r.status !== 400) break;
+    if (!/: (404|400) /.test(lastErr)) break;
   }
   throw new Error(lastErr);
 }
@@ -93,7 +104,7 @@ Deno.serve(async (req) => {
     }
 
     if (p.mode === "tts") {
-      const text = String(p.text ?? "").slice(0, 1500).trim();
+      const text = String(p.text ?? "").slice(0, 2000).trim();
       if (!text) return json({ error: "Kein Text" }, 400);
       const r = await callGemini(TTS_MODELS, {
         contents: [{ parts: [{ text: "Lies ruhig, warm und langsam wie eine Gute-Nacht-Geschichte für ein Kind vor:\n\n" + text }] }],

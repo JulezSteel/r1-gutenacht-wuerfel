@@ -298,13 +298,21 @@ function chunkText(text, max) {
 function speak(text) {
   stopSpeaking();
   var token = audioToken;
-  var chunks = chunkText(text, 700);
+  var chunks = chunkText(text, 1400);
   var pending = [];
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function fetchChunk(i, attempt) {
+    return post({ mode: 'tts', text: chunks[i] }, true).catch(function (e) {
+      if (attempt >= 3 || token !== audioToken) throw e;
+      return wait(5000 * (attempt + 1)).then(function () { return fetchChunk(i, attempt + 1); });
+    });
+  }
   function load(i) {
     if (!pending[i]) {
-      pending[i] = post({ mode: 'tts', text: chunks[i] }, true).then(function (b) {
+      pending[i] = fetchChunk(i, 0).then(function (b) {
         var u = URL.createObjectURL(b); audioUrls.push(u); return u;
       });
+      pending[i].catch(function () {});
     }
     return pending[i];
   }
@@ -313,9 +321,10 @@ function speak(text) {
   function playIdx(i) {
     if (token !== audioToken) return;
     if (i >= chunks.length) { $storyState.textContent = 'Gute Nacht 🌙'; return; }
+    if (i > 0) $storyState.innerHTML = 'Moment<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
     load(i).then(function (url) {
       if (token !== audioToken) return;
-      if (i + 1 < chunks.length) load(i + 1);   // nächstes Stück schon laden
+      if (i + 1 < chunks.length) setTimeout(function () { load(i + 1); }, 3000);   // nächstes Stück vorladen
       player.src = url;
       player.onended = function () { playIdx(i + 1); };
       $storyState.textContent = 'Wird vorgelesen 🔊 ' + (i + 1) + '/' + chunks.length;
