@@ -59,6 +59,7 @@
   #storyState { font-size: 10px; color: #FE5000; text-align: center; margin-top: 2px; }
   #storyView { flex: 1; overflow: hidden; margin-top: 6px; position: relative; }
   #storyText { font-size: 13px; line-height: 1.45; transition: transform .2s ease; white-space: pre-wrap; }
+  #btnPlay { display: none; flex: none; height: 34px; margin-top: 6px; background: #FE5000; color: #0e0e10; }
   #storyHint { font-size: 9px; color: rgba(255,255,255,.4); text-align: center; margin-top: 4px; }
   .dots span { display: inline-block; animation: blink 1.2s infinite; }
   .dots span:nth-child(2) { animation-delay: .2s; } .dots span:nth-child(3) { animation-delay: .4s; }
@@ -84,6 +85,7 @@
 <div id="storyScreen" class="screen">
   <div id="storyHead"></div>
   <div id="storyState"></div>
+  <button id="btnPlay">▶ Abspielen</button>
   <div id="storyView"><div id="storyText"></div></div>
   <div id="storyHint">Rad: lesen · Taste: zurück · lang: nochmal hören</div>
 </div>
@@ -91,7 +93,6 @@
 <script>
 // ---------- Einstellungen ----------
 var KIND_NAME = 'Adrian';          // optional: Name deines Sohnes, dann fährt er als Beifahrer mit
-var STORY_WORDS = 380;       // ca. 3 Minuten vorgelesen
 var TIMEOUT_MS = 90000;
 
 // ---------- Zutaten (Farbe = Index % 3) ----------
@@ -201,26 +202,27 @@ function finishSpin() {
 }
 
 // ---------- Geschichte ----------
-function buildPrompt() {
-  var h = REELS[0].items[state[0].idx][1];
-  var o = REELS[1].items[state[1].idx][1];
-  var u = REELS[2].items[state[2].idx][1];
-  var p = 'Erzähle auf Deutsch eine Gute-Nacht-Geschichte für einen sechsjährigen Jungen, der Autos und alles mit Rädern liebt. ' +
-    'Hauptfigur: ' + h + '. Ort: ' + o + '. Wichtige Überraschung: ' + u + '. ' +
-    'Länge: etwa ' + STORY_WORDS + ' Wörter, also rund drei Minuten vorgelesen. ' +
-    'Kurze, einfache Sätze, freundlich und ein bisschen lustig, mit Fahrzeug-Geräuschen wie brumm oder tüt-tüt. ' +
-    'Nichts Gruseliges, keine Unfälle mit Verletzten. ' +
-    'Gegen Ende wird es langsam ruhig: Die Figur fährt nach Hause, macht die Scheinwerfer aus und schläft ein. ';
-  if (KIND_NAME) p += 'Ein Junge namens ' + KIND_NAME + ' fährt als Beifahrer mit und hilft. ';
-  if (isJackpot()) p += 'Das ist eine Jackpot-Geschichte: Baue eine besonders lustige, glitzernde Überraschung ein. ';
-  p += 'Antworte nur mit der Geschichte selbst, ohne Überschrift und ohne Einleitung.';
-  return p;
+// ---------- Backend (Supabase + Gemini) ----------
+var BACKEND = 'https://cwynvjvcqsgwbrgqtthq.supabase.co/functions/v1/gutenacht';
+var storyToken = 0;
+
+function post(body, asBlob) {
+  return fetch(BACKEND, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (t) { throw new Error(r.status + ' ' + t.slice(0, 140)); });
+    return asBlob ? r.blob() : r.json();
+  });
 }
 
 function startStory() {
   if (spinning || storyActive) return;
+  unlockAudio();
   storyActive = true;
   waitingStory = true;
+  var token = ++storyToken;
   scrollOffset = 0;
   $storyText.style.transform = 'translateY(0)';
   $storyHead.textContent = state.map(function (s, i) { return REELS[i].items[s.idx][0]; }).join(' ');
@@ -230,22 +232,21 @@ function startStory() {
   $slot.classList.remove('visible');
   $story.classList.add('visible');
 
-  var prompt = buildPrompt();
-  if (typeof PluginMessageHandler !== 'undefined') {
-    PluginMessageHandler.postMessage(JSON.stringify({
-      message: prompt, useLLM: true
-    }));
-    storyTimer = setTimeout(function () {
-      if (!waitingStory) return;
-      waitingStory = false;
-      $storyState.textContent = 'Keine Antwort – WLAN prüfen und nochmal versuchen';
-    }, TIMEOUT_MS);
-  } else {
-    // Testmodus im Browser
-    setTimeout(function () {
-      showStory('(Testmodus im Browser – auf dem R1 kommt hier die echte Geschichte)\n\n' + prompt);
-    }, 800);
-  }
+  post({
+    mode: 'story',
+    hero: REELS[0].items[state[0].idx][1],
+    place: REELS[1].items[state[1].idx][1],
+    item: REELS[2].items[state[2].idx][1],
+    jackpot: isJackpot(),
+    kid: KIND_NAME
+  }).then(function (d) {
+    if (token !== storyToken || !storyActive) return;
+    showStory(String(d.text || '').trim());
+  }).catch(function (e) {
+    if (token !== storyToken || !storyActive) return;
+    waitingStory = false;
+    $storyState.textContent = 'Fehler: ' + String(e.message || e).slice(0, 80);
+  });
 }
 
 function showStory(text) {
@@ -256,22 +257,38 @@ function showStory(text) {
   speak(text);
 }
 
-// ---------- Vorlesen ----------
-// Weg 1: Browser-Stimme (speechSynthesis). Startet sie nicht binnen 2,5 s,
-// Weg 2: Text ans R1 schicken und von der eingebauten Stimme vorlesen lassen.
+// ---------- Vorlesen (Audio vom Backend, in Stücken) ----------
 var currentStory = '';
-var speakToken = 0;
+var player = new Audio();
+player.preload = 'auto';
+var SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+var audioToken = 0;
+var audioUrls = [];
+var $btnPlay = document.getElementById('btnPlay');
 
-function stopSpeaking() {
-  speakToken++;
-  try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
+function unlockAudio() {
+  try { player.src = SILENT; var p = player.play(); if (p && p.catch) p.catch(function () {}); } catch (e) {}
 }
 
-function chunkText(text) {
+function showPlay(fn) {
+  $btnPlay.style.display = 'block';
+  $btnPlay.onclick = function () { hidePlay(); fn(); };
+}
+function hidePlay() { $btnPlay.style.display = 'none'; $btnPlay.onclick = null; }
+
+function stopSpeaking() {
+  audioToken++;
+  try { player.pause(); player.onended = null; } catch (e) {}
+  audioUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (e) {} });
+  audioUrls = [];
+  hidePlay();
+}
+
+function chunkText(text, max) {
   var parts = text.replace(/\s+/g, ' ').match(/[^.!?]+[.!?]*\s*/g) || [text];
   var chunks = [], cur = '';
   parts.forEach(function (p) {
-    if ((cur + p).length > 220 && cur) { chunks.push(cur); cur = ''; }
+    if ((cur + p).length > max && cur) { chunks.push(cur); cur = ''; }
     cur += p;
   });
   if (cur.trim()) chunks.push(cur);
@@ -280,61 +297,43 @@ function chunkText(text) {
 
 function speak(text) {
   stopSpeaking();
-  var token = speakToken;
-  var hasTTS = false;
-  try { hasTTS = !!(window.speechSynthesis && window.SpeechSynthesisUtterance); } catch (e) {}
-  if (!hasTTS) { speakWithR1(text); return; }
-
-  var started = false;
-  var voices = [];
-  try { voices = window.speechSynthesis.getVoices() || []; } catch (e) {}
-  var deVoice = voices.filter(function (v) { return /^de/i.test(v.lang); })[0] || null;
-
-  chunkText(text).forEach(function (chunk) {
-    var u = new SpeechSynthesisUtterance(chunk);
-    u.lang = 'de-DE';
-    u.rate = 0.9;
-    if (deVoice) u.voice = deVoice;
-    u.onstart = function () {
-      if (token !== speakToken) return;
-      if (!started) { started = true; $storyState.textContent = 'Wird vorgelesen 🔊 (Browser-Stimme)'; }
-    };
-    window.speechSynthesis.speak(u);
-  });
-
-  setTimeout(function () {
-    if (token !== speakToken || started) return;
-    try { window.speechSynthesis.cancel(); } catch (e) {}
-    speakWithR1(text);
-  }, 2500);
-}
-
-function speakWithR1(text) {
-  if (typeof PluginMessageHandler === 'undefined') {
-    $storyState.textContent = 'Keine Stimme verfügbar (Testmodus)';
-    return;
+  var token = audioToken;
+  var chunks = chunkText(text, 700);
+  var pending = [];
+  function load(i) {
+    if (!pending[i]) {
+      pending[i] = post({ mode: 'tts', text: chunks[i] }, true).then(function (b) {
+        var u = URL.createObjectURL(b); audioUrls.push(u); return u;
+      });
+    }
+    return pending[i];
   }
-  $storyState.textContent = 'Wird vorgelesen 🔊 (R1-Stimme)';
-  PluginMessageHandler.postMessage(JSON.stringify({
-    message: 'Lies den folgenden Text wörtlich und vollständig auf Deutsch vor. ' +
-      'Sag nichts davor und nichts danach, ändere und kürze nichts.\n\n' + text,
-    useLLM: true,
-    wantsR1Response: true
-  }));
-}
+  $storyState.innerHTML = 'Stimme wird vorbereitet<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
 
-window.onPluginMessage = function (data) {
-  if (!waitingStory || !data) return;
-  var text = '';
-  if (data.data) {
-    try {
-      var parsed = JSON.parse(data.data);
-      text = typeof parsed === 'string' ? parsed : (parsed.story || parsed.text || parsed.message || '');
-    } catch (e) { text = String(data.data); }
+  function playIdx(i) {
+    if (token !== audioToken) return;
+    if (i >= chunks.length) { $storyState.textContent = 'Gute Nacht 🌙'; return; }
+    load(i).then(function (url) {
+      if (token !== audioToken) return;
+      if (i + 1 < chunks.length) load(i + 1);   // nächstes Stück schon laden
+      player.src = url;
+      player.onended = function () { playIdx(i + 1); };
+      $storyState.textContent = 'Wird vorgelesen 🔊 ' + (i + 1) + '/' + chunks.length;
+      var p = player.play();
+      if (p && p.catch) p.catch(function () {
+        $storyState.textContent = 'Zum Abspielen tippen';
+        showPlay(function () {
+          $storyState.textContent = 'Wird vorgelesen 🔊 ' + (i + 1) + '/' + chunks.length;
+          player.play();
+        });
+      });
+    }).catch(function (e) {
+      if (token !== audioToken) return;
+      $storyState.textContent = 'Stimme: ' + String(e.message || e).slice(0, 80);
+    });
   }
-  if (!text && data.message) text = String(data.message);
-  if (text) showStory(text.trim());
-};
+  playIdx(0);
+}
 
 function closeStory() {
   stopSpeaking();

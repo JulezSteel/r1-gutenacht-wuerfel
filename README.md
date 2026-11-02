@@ -22,4 +22,4 @@ Slot-Maschine mit drei Rollen (Held, Ort, Überraschung). Danach erzählt das R1
 - `REELS`: Zutatenlisten
 
 ## Technik
-Die Geschichte kommt vom eingebauten R1-Sprachmodell (`PluginMessageHandler`, `useLLM` + `wantsR1Response`). Kein API-Key, kein Backend. Im Desktop-Browser läuft ein Testmodus (Tasten: S = drehen, Enter = Geschichte, Esc = Seitentaste, Pfeile = Scrollrad).
+Geschichte und Stimme kommen von Gemini über die Supabase-Edge-Function `gutenacht` (Projekt „Stammbaum“, Code unter `supabase/functions/gutenacht`). Benötigt das Secret `GEMINI_API_KEY`. Optional `GEMINI_VOICE` (Standard: Sulafat). Audio wird in Stücken geladen und abgespielt. Im Desktop-Browser läuft ein Testmodus (Tasten: S = drehen, Enter = Geschichte, Esc = Seitentaste, Pfeile = Scrollrad).
